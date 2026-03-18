@@ -1,0 +1,9 @@
+{
+  "name": "africdsa-ml-notebooks",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@notionhq/client": "^2.2.14"
+  }
+}

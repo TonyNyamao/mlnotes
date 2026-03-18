@@ -2,10 +2,35 @@
 
 /* ── State ── */
 let currentCourseIdx = 0;
-let currentNbId      = null;
-let selectedCellEl   = null;
-let selectedCellIdx  = -1;
-let cellRunStates    = {};
+let currentNbId = null;
+let selectedCellEl = null;
+let selectedCellIdx = -1;
+let cellRunStates = {};
+
+const STORAGE_KEYS = {
+  notebooks: "africdsa.notebooks.v1",
+  courses: "africdsa.courses.v1",
+};
+
+const STATIC_PHASE_TABS = [
+  "04 Storage",
+  "05 ML & Serving",
+  "06 Security",
+  "07 Monitoring",
+  "Costs",
+  "Checklist",
+];
+
+const hasWindow = typeof window !== "undefined";
+const FALLBACK_NOTEBOOKS = hasWindow && window.NOTEBOOKS && typeof window.NOTEBOOKS === "object"
+  ? window.NOTEBOOKS
+  : {};
+const FALLBACK_COURSES = hasWindow && Array.isArray(window.COURSES)
+  ? window.COURSES
+  : [];
+
+let notebooksData = FALLBACK_NOTEBOOKS;
+let coursesData = FALLBACK_COURSES;
 
 const EXPLANATIONS = [
   "This cell imports libraries and loads a built-in sklearn dataset. datasets.load_*() returns a Bunch object — .data gives the feature matrix, .target gives the labels.",
@@ -19,12 +44,150 @@ const EXPLANATIONS = [
 ];
 
 /* ══════════════════════════════════
-   INIT
+   INIT + DATA LOADING
 ══════════════════════════════════ */
 
-function init() {
+async function init() {
+  showLoadingSkeleton();
+  await hydrateData();
+
+  if (!Array.isArray(coursesData) || coursesData.length === 0) {
+    showNoDataState("No courses available. Check Notion API configuration.");
+    return;
+  }
+
   renderPhaseTabs();
   loadCourse(0);
+}
+
+async function hydrateData() {
+  const [liveNotebooks, liveCourses] = await Promise.all([
+    fetchAllNotebooks(),
+    fetchCourseStructure(),
+  ]);
+
+  if (hasNotebookPayload(liveNotebooks)) {
+    notebooksData = liveNotebooks;
+  } else if (!hasNotebookPayload(FALLBACK_NOTEBOOKS)) {
+    console.warn("Notebook data is empty from Notion and fallback sources.");
+  }
+
+  if (Array.isArray(liveCourses) && liveCourses.length) {
+    coursesData = liveCourses;
+  } else if (!Array.isArray(FALLBACK_COURSES) || !FALLBACK_COURSES.length) {
+    console.warn("Course data is empty from Notion and fallback sources.");
+  }
+}
+
+function showLoadingSkeleton() {
+  const topbar = document.getElementById("nbTopbar");
+  const alert = document.getElementById("nbAlert");
+  const cells = document.getElementById("cells");
+
+  if (topbar) topbar.style.display = "none";
+  if (alert) alert.style.display = "none";
+
+  if (cells) {
+    cells.innerHTML = `
+      <div class="empty-state">
+        <div style="display:inline-flex;align-items:center;gap:10px;">
+          <div class="spinner"></div>
+          <p>Loading notebooks from Notion...</p>
+        </div>
+      </div>`;
+  }
+
+  setExplainText("Loading notebook content...");
+}
+
+function showNoDataState(message) {
+  const topbar = document.getElementById("nbTopbar");
+  const alert = document.getElementById("nbAlert");
+  const cells = document.getElementById("cells");
+
+  if (topbar) topbar.style.display = "none";
+  if (alert) alert.style.display = "none";
+
+  if (cells) {
+    cells.innerHTML = `
+      <div class="empty-state">
+        <h3>Data unavailable</h3>
+        <p>${escHTML(message)}</p>
+      </div>`;
+  }
+}
+
+function readSessionCache(key) {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (error) {
+    console.warn(`Failed reading sessionStorage key ${key}:`, error);
+    return null;
+  }
+}
+
+function writeSessionCache(key, data) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify(data));
+  } catch (error) {
+    console.warn(`Failed writing sessionStorage key ${key}:`, error);
+  }
+}
+
+async function fetchFromNotionProxy(type) {
+  const response = await fetch(`/api/notion-proxy?type=${encodeURIComponent(type)}`);
+  if (!response.ok) {
+    throw new Error(`Proxy request failed (${response.status})`);
+  }
+  return response.json();
+}
+
+function hasNotebookPayload(payload) {
+  return payload && typeof payload === "object" && !Array.isArray(payload) && Object.keys(payload).length > 0;
+}
+
+async function fetchAllNotebooks() {
+  const cached = readSessionCache(STORAGE_KEYS.notebooks);
+  if (hasNotebookPayload(cached)) {
+    return cached;
+  }
+
+  try {
+    const responseData = await fetchFromNotionProxy("notebooks");
+    if (hasNotebookPayload(responseData)) {
+      writeSessionCache(STORAGE_KEYS.notebooks, responseData);
+      return responseData;
+    }
+
+    console.warn("Notion notebooks response was empty. Falling back to local data.");
+  } catch (error) {
+    console.warn("Failed to load notebooks from Notion proxy. Falling back to local data.", error);
+  }
+
+  return FALLBACK_NOTEBOOKS;
+}
+
+async function fetchCourseStructure() {
+  const cached = readSessionCache(STORAGE_KEYS.courses);
+  if (Array.isArray(cached) && cached.length) {
+    return cached;
+  }
+
+  try {
+    const responseData = await fetchFromNotionProxy("courses");
+    if (Array.isArray(responseData) && responseData.length) {
+      writeSessionCache(STORAGE_KEYS.courses, responseData);
+      return responseData;
+    }
+
+    console.warn("Notion courses response was empty. Falling back to local data.");
+  } catch (error) {
+    console.warn("Failed to load courses from Notion proxy. Falling back to local data.", error);
+  }
+
+  return FALLBACK_COURSES;
 }
 
 /* ══════════════════════════════════
@@ -34,15 +197,16 @@ function init() {
 function renderPhaseTabs() {
   const tabBar = document.getElementById("phaseTabs");
   tabBar.innerHTML = "";
-  COURSES.forEach((course, idx) => {
+
+  coursesData.forEach((course, idx) => {
     const tab = document.createElement("div");
     tab.className = "phase-tab" + (idx === currentCourseIdx ? " active" : "");
-    tab.textContent = course.tabLabel;
+    tab.textContent = course.tabLabel || `Course ${idx + 1}`;
     tab.onclick = () => loadCourse(idx);
     tabBar.appendChild(tab);
   });
-  // Add non-active static tabs to look like the reference
-  ["04 Storage","05 ML & Serving","06 Security","07 Monitoring","Costs","Checklist"].forEach(label => {
+
+  STATIC_PHASE_TABS.forEach((label) => {
     const tab = document.createElement("div");
     tab.className = "phase-tab";
     tab.textContent = label;
@@ -54,27 +218,46 @@ function renderPhaseTabs() {
 
 function loadCourse(idx) {
   currentCourseIdx = idx;
-  currentNbId      = null;
-  cellRunStates    = {};
-  selectedCellIdx  = -1;
-  selectedCellEl   = null;
+  currentNbId = null;
+  cellRunStates = {};
+  selectedCellIdx = -1;
+  selectedCellEl = null;
 
-  // Update tabs
-  document.querySelectorAll(".phase-tab").forEach((t, i) =>
-    t.classList.toggle("active", i === idx));
+  document.querySelectorAll(".phase-tab").forEach((tab, tabIdx) => {
+    tab.classList.toggle("active", tabIdx === idx);
+  });
 
-  const course = COURSES[idx];
+  const course = coursesData[idx];
+  if (!course) {
+    showNoDataState("Unable to load selected course.");
+    return;
+  }
 
-  // Update hero
-  document.getElementById("heroTitle").textContent = course.heroTitle;
-  document.getElementById("heroDesc").textContent  = course.heroDesc;
+  document.getElementById("heroTitle").textContent = course.heroTitle || "Machine Learning Notebook";
+  document.getElementById("heroDesc").textContent = course.heroDesc || "";
 
-  // Render sidebar
   renderSidebar(course);
 
-  // Load first notebook
-  const firstNb = course.modules[0].notebooks[0];
-  loadNotebook(firstNb.id);
+  const firstNotebookId = getFirstNotebookId(course);
+  if (!firstNotebookId) {
+    showNoDataState("No notebooks available for this course yet.");
+    return;
+  }
+
+  loadNotebook(firstNotebookId);
+}
+
+function getFirstNotebookId(course) {
+  const modules = Array.isArray(course.modules) ? course.modules : [];
+
+  for (const moduleEntry of modules) {
+    const notebooks = Array.isArray(moduleEntry.notebooks) ? moduleEntry.notebooks : [];
+    if (notebooks.length && notebooks[0].id) {
+      return notebooks[0].id;
+    }
+  }
+
+  return null;
 }
 
 /* ══════════════════════════════════
@@ -85,31 +268,35 @@ function renderSidebar(course) {
   const container = document.getElementById("sidebarModules");
   container.innerHTML = "";
 
-  course.modules.forEach(mod => {
+  const modules = Array.isArray(course.modules) ? course.modules : [];
+
+  modules.forEach((moduleEntry) => {
     const label = document.createElement("div");
     label.className = "nav-section-label";
     label.style.marginTop = "18px";
-    label.textContent = mod.navLabel.toUpperCase();
+    label.textContent = String(moduleEntry.navLabel || "Module").toUpperCase();
     container.appendChild(label);
 
-    mod.notebooks.forEach(nb => {
+    const notebooks = Array.isArray(moduleEntry.notebooks) ? moduleEntry.notebooks : [];
+    notebooks.forEach((notebook) => {
       const item = document.createElement("div");
-      item.className = "nav-item" + (nb.id === currentNbId ? " active" : "");
-      item.id = "nav-" + nb.id;
-      item.innerHTML = `<span class="nav-dot"></span>${nb.label}`;
-      item.onclick = () => loadNotebook(nb.id);
+      item.className = "nav-item" + (notebook.id === currentNbId ? " active" : "");
+      item.id = "nav-" + notebook.id;
+      item.innerHTML = `<span class="nav-dot"></span>${escHTML(notebook.label || notebook.id || "Notebook")}`;
+      item.onclick = () => loadNotebook(notebook.id);
       container.appendChild(item);
     });
   });
 }
 
 function setActiveNav(id) {
-  document.querySelectorAll(".nav-item").forEach(el =>
-    el.classList.toggle("active", el.id === "nav-" + id));
-  document.querySelectorAll(".nav-item .nav-dot").forEach(dot => {
-    dot.closest(".nav-item").classList.contains("active")
-      ? (dot.style.background = "var(--amber)")
-      : (dot.style.background = "");
+  document.querySelectorAll(".nav-item").forEach((el) => {
+    el.classList.toggle("active", el.id === "nav-" + id);
+  });
+
+  document.querySelectorAll(".nav-item .nav-dot").forEach((dot) => {
+    const active = dot.closest(".nav-item")?.classList.contains("active");
+    dot.style.background = active ? "var(--amber)" : "";
   });
 }
 
@@ -118,20 +305,20 @@ function setActiveNav(id) {
 ══════════════════════════════════ */
 
 function loadNotebook(id) {
-  currentNbId     = id;
-  cellRunStates   = {};
+  currentNbId = id;
+  cellRunStates = {};
   selectedCellIdx = -1;
-  selectedCellEl  = null;
+  selectedCellEl = null;
   setActiveNav(id);
   setExplainText("Select a code cell · click Explain for a plain-English breakdown");
 
-  const nb = NOTEBOOKS[id];
+  const notebook = notebooksData[id];
   const topbar = document.getElementById("nbTopbar");
-  const alert  = document.getElementById("nbAlert");
+  const alert = document.getElementById("nbAlert");
 
-  if (!nb) {
+  if (!notebook) {
     topbar.style.display = "none";
-    alert.style.display  = "none";
+    alert.style.display = "none";
     document.getElementById("cells").innerHTML = `
       <div class="empty-state">
         <h3>Coming soon</h3>
@@ -140,57 +327,61 @@ function loadNotebook(id) {
     return;
   }
 
-  // Update topbar
   topbar.style.display = "flex";
-  document.getElementById("nbPhasePill").textContent   = nb.phase;
-  document.getElementById("nbTopbarTitle").textContent = nb.title;
-  document.getElementById("nbTopbarMeta").textContent  = nb.meta;
+  document.getElementById("nbPhasePill").textContent = notebook.phase || "Phase";
+  document.getElementById("nbTopbarTitle").textContent = notebook.title || "Notebook";
+  document.getElementById("nbTopbarMeta").textContent = notebook.meta || "";
 
-  // Alert
-  if (nb.alert) {
+  if (notebook.alert) {
     alert.style.display = "block";
-    alert.innerHTML = nb.alert;
+    alert.innerHTML = notebook.alert;
   } else {
     alert.style.display = "none";
   }
 
-  renderCells(nb);
+  renderCells(notebook);
 }
 
 /* ══════════════════════════════════
    CELL RENDERING
 ══════════════════════════════════ */
 
-function renderCells(nb) {
+function renderCells(notebook) {
   const container = document.getElementById("cells");
   container.innerHTML = "";
 
-  nb.cells.forEach((cell, idx) => {
+  let codeCellIdx = 0;
+  const cells = Array.isArray(notebook.cells) ? notebook.cells : [];
+
+  cells.forEach((cell) => {
     if (cell.type === "md") {
       const el = document.createElement("div");
       el.className = "cell-md";
-      el.innerHTML = cell.content;
+      el.innerHTML = cell.content || "";
       container.appendChild(el);
-    } else if (cell.type === "code") {
-      container.appendChild(buildCodeCell(cell, idx));
+      return;
+    }
+
+    if (cell.type === "code") {
+      container.appendChild(buildCodeCell(cell, codeCellIdx));
+      codeCellIdx += 1;
     }
   });
 }
 
 function buildCodeCell(cell, idx) {
   const wrap = document.createElement("div");
-
-  // Count code lines for line numbers
-  const codeLines = cell.code.split("\n");
-  const lineNums  = codeLines.map((_, i) => i + 1).join("\n");
-
+  const codeText = String(cell.code || "");
+  const codeLines = codeText.split("\n");
+  const lineNums = codeLines.map((_, lineIdx) => lineIdx + 1).join("\n");
+  const counter = String(cell.counter || `[${idx + 1}]`);
   const alreadyRan = !!cellRunStates[idx];
 
   wrap.innerHTML = `
     <div class="step-card${alreadyRan ? " open" : ""}" id="card-${idx}" onclick="toggleCell(${idx}, this)">
-      <div class="step-num">${cell.counter.replace(/\[|\]/g,"")}</div>
-      <div class="step-label">${cell.label}</div>
-      <div class="step-service">${cell.service}</div>
+      <div class="step-num">${escHTML(counter.replace(/\[|\]/g, ""))}</div>
+      <div class="step-label">${escHTML(cell.label || "Untitled step")}</div>
+      <div class="step-service">${escHTML(cell.service || "notion")}</div>
       <div class="step-arrow">▶</div>
     </div>
 
@@ -198,12 +389,12 @@ function buildCodeCell(cell, idx) {
       <div class="code-block">
         <div class="code-toolbar">
           <span class="code-label">PYTHON 3</span>
-          <span class="code-counter">${cell.counter}</span>
+          <span class="code-counter">${escHTML(counter)}</span>
           <button class="run-cell-btn" onclick="runCell(${idx}, event)">▶ run</button>
         </div>
         <div class="code-line-numbers">
           <div class="line-nums">${lineNums}</div>
-          <div class="code-content">${cell.code}</div>
+          <div class="code-content">${formatCodeMarkup(codeText)}</div>
         </div>
       </div>
 
@@ -217,8 +408,7 @@ function buildCodeCell(cell, idx) {
       </div>
     </div>`;
 
-  // Handle cell click for selection
-  wrap.querySelector(".step-card").addEventListener("click", (e) => {
+  wrap.querySelector(".step-card").addEventListener("click", () => {
     selectCell(idx, wrap.querySelector(".step-card"));
   });
 
@@ -238,29 +428,51 @@ function buildOutputHTML(cell) {
   }
 
   switch (cell.output) {
-    case "text":
-      html += `<div class="output-text">${escHTML(cell.outputData)}</div>`;
-      break;
+    case "table": {
+      const headers = Array.isArray(cell.outputData?.headers) ? cell.outputData.headers : [];
+      const rows = Array.isArray(cell.outputData?.rows) ? cell.outputData.rows : [];
 
-    case "table":
+      if (!headers.length || !rows.length) {
+        html += `<div class="output-text">No tabular output provided.</div>`;
+        break;
+      }
+
       html += `<table class="output-table">
-        <thead><tr>${cell.outputData.headers.map(h => `<th>${h}</th>`).join("")}</tr></thead>
-        <tbody>${cell.outputData.rows.map(r =>
-          `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`
-        ).join("")}</tbody>
+        <thead><tr>${headers.map((header) => `<th>${escHTML(header)}</th>`).join("")}</tr></thead>
+        <tbody>${rows.map((row) => `<tr>${row.map((cellValue) => `<td>${escHTML(cellValue)}</td>`).join("")}</tr>`).join("")}</tbody>
       </table>`;
       break;
+    }
 
-    case "bar":
-      html += `<div class="output-bars">${cell.outputData.map(d => `
-        <div class="bar-row">
-          <div class="bar-label">${d.label}</div>
-          <div class="bar-track">
-            <div class="bar-fill" style="width:${((d.val/d.max)*100).toFixed(1)}%;background:${d.color}"></div>
-          </div>
-          <div class="bar-val">${d.display}</div>
-        </div>`).join("")}
+    case "bar": {
+      const bars = Array.isArray(cell.outputData) ? cell.outputData : [];
+      if (!bars.length) {
+        html += `<div class="output-text">No chart output provided.</div>`;
+        break;
+      }
+
+      html += `<div class="output-bars">${bars.map((bar) => {
+        const width = Number(bar.max) > 0
+          ? Math.max(0, Math.min(100, (Number(bar.val) / Number(bar.max)) * 100)).toFixed(1)
+          : "0.0";
+        const color = safeBarColor(bar.color);
+
+        return `
+          <div class="bar-row">
+            <div class="bar-label">${escHTML(bar.label || "")}</div>
+            <div class="bar-track">
+              <div class="bar-fill" style="width:${width}%;background:${color}"></div>
+            </div>
+            <div class="bar-val">${escHTML(bar.display || "")}</div>
+          </div>`;
+      }).join("")}
       </div>`;
+      break;
+    }
+
+    case "text":
+    default:
+      html += `<div class="output-text">${escHTML(cell.outputData || "")}</div>`;
       break;
   }
 
@@ -272,8 +484,14 @@ function buildOutputHTML(cell) {
    INTERACTION
 ══════════════════════════════════ */
 
+function getCodeCells(notebook) {
+  return (notebook?.cells || []).filter((cell) => cell.type === "code");
+}
+
 function toggleCell(idx, cardEl) {
   const body = document.getElementById(`body-${idx}`);
+  if (!body) return;
+
   const isOpen = body.classList.contains("open");
   body.classList.toggle("open", !isOpen);
   cardEl.classList.toggle("open", !isOpen);
@@ -282,7 +500,7 @@ function toggleCell(idx, cardEl) {
 
 function selectCell(idx, cardEl) {
   if (selectedCellEl) selectedCellEl.classList.remove("active-card");
-  selectedCellEl  = cardEl;
+  selectedCellEl = cardEl;
   selectedCellIdx = idx;
   cardEl.classList.add("active-card");
 }
@@ -290,70 +508,66 @@ function selectCell(idx, cardEl) {
 function runCell(idx, event) {
   if (event) event.stopPropagation();
 
-  const nb = NOTEBOOKS[currentNbId];
-  if (!nb) return;
-  const cell = nb.cells.filter(c => c.type === "code")[idx - (nb.cells.filter((c,i) => c.type==="md" && i < idx).length)];
+  const notebook = notebooksData[currentNbId];
+  if (!notebook) return;
 
-  // Find the actual cell by matching index in full cells array
-  const codeCells = nb.cells.map((c, i) => ({c, i})).filter(x => x.c.type === "code");
-  const entry = codeCells[idx] || codeCells.find((_,i) => i === idx);
-  if (!entry) return;
+  const actualCell = getCodeCells(notebook)[idx];
+  if (!actualCell) return;
 
-  const actualCell = entry.c;
-  const body     = document.getElementById(`body-${idx}`);
-  const card     = document.getElementById(`card-${idx}`);
-  const loading  = document.getElementById(`loading-${idx}`);
-  const output   = document.getElementById(`output-${idx}`);
+  const body = document.getElementById(`body-${idx}`);
+  const card = document.getElementById(`card-${idx}`);
+  const loading = document.getElementById(`loading-${idx}`);
+  const output = document.getElementById(`output-${idx}`);
 
-  // Open the body if closed
+  if (!body || !card || !loading || !output) return;
+
   body.classList.add("open");
   card.classList.add("open");
-
-  output.className   = "cell-output";
-  loading.className  = "cell-loading visible";
+  output.className = "cell-output";
+  loading.className = "cell-loading visible";
 
   const delay = 500 + Math.random() * 800;
   setTimeout(() => {
     cellRunStates[idx] = true;
-    loading.className  = "cell-loading";
-    output.innerHTML   = buildOutputHTML(actualCell);
-    output.className   = "cell-output visible";
+    loading.className = "cell-loading";
+    output.innerHTML = buildOutputHTML(actualCell);
+    output.className = "cell-output visible";
     setExplainText(`Cell ${actualCell.counter} executed · click Explain for a walkthrough`);
   }, delay);
 }
 
 async function runAll() {
-  const nb = NOTEBOOKS[currentNbId];
-  if (!nb) return;
+  const notebook = notebooksData[currentNbId];
+  if (!notebook) return;
 
   const btn = document.getElementById("runAllBtn");
   btn.classList.add("running");
   btn.textContent = "⏳ Running…";
 
-  const codeCells = nb.cells.map((c, i) => ({c, i})).filter(x => x.c.type === "code");
+  const codeCells = getCodeCells(notebook);
 
-  for (let j = 0; j < codeCells.length; j++) {
-    const {c: cell, i: rawIdx} = codeCells[j];
-    await sleep(350 + j * 200);
+  for (let idx = 0; idx < codeCells.length; idx++) {
+    const cell = codeCells[idx];
+    await sleep(350 + idx * 200);
 
-    const body    = document.getElementById(`body-${j}`);
-    const card    = document.getElementById(`card-${j}`);
-    const loading = document.getElementById(`loading-${j}`);
-    const output  = document.getElementById(`output-${j}`);
+    const body = document.getElementById(`body-${idx}`);
+    const card = document.getElementById(`card-${idx}`);
+    const loading = document.getElementById(`loading-${idx}`);
+    const output = document.getElementById(`output-${idx}`);
 
     if (!body || !loading || !output) continue;
 
     body.classList.add("open");
-    card && card.classList.add("open");
-    output.className  = "cell-output";
+    if (card) card.classList.add("open");
+    output.className = "cell-output";
     loading.className = "cell-loading visible";
 
     await sleep(500 + Math.random() * 600);
 
-    cellRunStates[j] = true;
+    cellRunStates[idx] = true;
     loading.className = "cell-loading";
-    output.innerHTML  = buildOutputHTML(cell);
-    output.className  = "cell-output visible";
+    output.innerHTML = buildOutputHTML(cell);
+    output.className = "cell-output visible";
   }
 
   btn.classList.remove("running");
@@ -366,29 +580,54 @@ function explainSelected() {
     setExplainText("Click on a code cell header first, then press Explain.");
     return;
   }
-  const nb = NOTEBOOKS[currentNbId];
-  if (!nb) return;
-  const codeCells = nb.cells.filter(c => c.type === "code");
-  const cell = codeCells[selectedCellIdx];
-  if (!cell) { setExplainText("Select a code cell to explain."); return; }
 
-  const explanation = EXPLANATIONS[selectedCellIdx] || EXPLANATIONS[selectedCellIdx % EXPLANATIONS.length] ||
-    "This cell uses scikit-learn's standard API: .fit() trains the model, .predict() generates outputs, .transform() preprocesses data.";
+  const notebook = notebooksData[currentNbId];
+  if (!notebook) return;
+
+  const selectedCodeCell = getCodeCells(notebook)[selectedCellIdx];
+  if (!selectedCodeCell) {
+    setExplainText("Select a code cell to explain.");
+    return;
+  }
+
+  const explanation = EXPLANATIONS[selectedCellIdx]
+    || EXPLANATIONS[selectedCellIdx % EXPLANATIONS.length]
+    || "This cell uses scikit-learn's standard API: .fit() trains the model, .predict() generates outputs, .transform() preprocesses data.";
+
   setExplainText("✦ " + explanation);
 }
 
 function setExplainText(msg) {
-  document.getElementById("explainText").textContent = msg;
+  const explainText = document.getElementById("explainText");
+  if (explainText) {
+    explainText.textContent = msg;
+  }
 }
 
 function escHTML(str) {
   return String(str)
-    .replace(/&/g,"&amp;")
-    .replace(/</g,"&lt;")
-    .replace(/>/g,"&gt;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function formatCodeMarkup(code) {
+  const raw = String(code || "");
+  const hasHighlightMarkup = /<span class="(kw|fn|str|num|cm|cls|op)">/.test(raw);
+  return hasHighlightMarkup ? raw : escHTML(raw);
+}
+
+function safeBarColor(color) {
+  const fallback = "#4caf7d";
+  if (typeof color !== "string") return fallback;
+  return /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(color) ? color : fallback;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /* ── Boot ── */
 init();

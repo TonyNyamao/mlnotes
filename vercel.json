@@ -1,3 +1,6 @@
 {
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [
+    { "source": "/api/notion-proxy", "destination": "/api/notion-proxy" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }
