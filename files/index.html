@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AFRICDSA — ML Associate</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-id">CDS-ML-07</div>
+      <div class="brand-name">ML Associate</div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-section-label">MODULES</div>
+      <div id="sidebarModules"></div>
+
+      <div class="nav-section-label" style="margin-top:24px">REFERENCE</div>
+      <div class="nav-item" onclick="loadNotebook('adv_concepts')">
+        <span class="nav-dot"></span>Algorithm cheat sheet
+      </div>
+      <div class="nav-item" onclick="loadNotebook('adv_concepts')">
+        <span class="nav-dot"></span>Evaluation metrics
+      </div>
+    </nav>
+  </aside>
+
+  <!-- ── Main ── -->
+  <main class="main" id="main">
+
+    <!-- Hero -->
+    <div class="hero">
+      <div class="hero-eyebrow">PRACTICAL IMPLEMENTATION GUIDE</div>
+      <h1 class="hero-title" id="heroTitle">Machine Learning with Python & scikit-learn</h1>
+      <p class="hero-desc" id="heroDesc">
+        Beginner-friendly notebooks covering every algorithm from Linear Regression to Neural Networks.
+        All examples use built-in scikit-learn datasets — no downloads required.
+      </p>
+      <div class="hero-tags">
+        <span class="tag tag-amber">Python 3 + scikit-learn</span>
+        <span class="tag tag-green">20 interactive notebooks</span>
+        <span class="tag tag-blue">No prior ML experience required</span>
+        <span class="tag tag-outline">Courses 7 · 8 · 9</span>
+      </div>
+    </div>
+
+    <!-- Phase tabs -->
+    <div class="phase-tabs" id="phaseTabs"></div>
+
+    <!-- Notebook content -->
+    <div class="notebook-wrap" id="notebookWrap">
+
+      <!-- Notebook topbar -->
+      <div class="nb-topbar" id="nbTopbar" style="display:none">
+        <div class="nb-topbar-left">
+          <div class="phase-pill" id="nbPhasePill">Phase 01</div>
+          <div>
+            <div class="nb-topbar-title" id="nbTopbarTitle"></div>
+            <div class="nb-topbar-meta" id="nbTopbarMeta"></div>
+          </div>
+        </div>
+        <div class="nb-topbar-right">
+          <button class="btn-run-all" id="runAllBtn" onclick="runAll()">▶ Run all cells</button>
+        </div>
+      </div>
+
+      <!-- Alert bar -->
+      <div class="nb-alert" id="nbAlert" style="display:none"></div>
+
+      <!-- Cells -->
+      <div class="cells" id="cells"></div>
+
+    </div>
+
+    <!-- AI explain bar -->
+    <div class="explain-bar" id="explainBar">
+      <span class="explain-text" id="explainText">Select a code cell · click Explain for a plain-English breakdown</span>
+      <button class="btn-explain" onclick="explainSelected()">✦ Explain cell</button>
+    </div>
+
+  </main>
+
+  <script src="data/courses.js"></script>
+  <script src="data/notebooks.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
